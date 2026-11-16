@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="AAUCTION_TOGGLE" header="AAUCTION" category="ADDONS">
+		AAuction_ToggleBinding()
+	</Binding>
+</Bindings>

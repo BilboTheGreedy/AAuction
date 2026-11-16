@@ -1,0 +1,15 @@
+## Interface: 16001
+## Title: AAuction
+## Notes: Auction house scanner with price history and tooltip prices
+## Version: 0.1.0
+## Category: Auctions
+## IconTexture: Interface\Icons\INV_Misc_Coin_01
+## Dependencies: ACore
+## SavedVariables: AAuctionDB
+
+Core.lua
+Prices.lua
+Scan.lua
+Tooltip.lua
+UI.lua
+
