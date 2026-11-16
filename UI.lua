@@ -111,31 +111,8 @@ local function updateRow(row, d)
 end
 
 local function optionsMenu(anchor)
-	local db = ns.db
-	local entries = {
-		{ text = "Options", title = true },
-		UI.Toggle(db, "tooltip", "Show prices in item tooltips"),
-		UI.Toggle(db, "stack", "Show the stack total too"),
-		UI.Toggle(db, "vendor", "Show the vendor price"),
-		UI.Toggle(db, "passive", "Learn prices while I browse the auction house"),
-		{ text = "Data", title = true },
-		{
-			text = "Remove items not seen for 30 days",
-			func = function()
-				ns.Print("removed " .. ns.Purge(30) .. " items")
-			end,
-		},
-		{
-			text = "Forget all prices on this realm",
-			func = function()
-				UI.Confirm("Forget every price stored for " .. ns.realmKey .. "?", function()
-					ns.db.realms[ns.realmKey] = nil
-					ns:Fire("PRICES_CHANGED")
-				end)
-			end,
-		},
-	}
-	for _, e in ipairs(UI.ScaleEntries(db, function(s) frame:SetScale(s) end)) do
+	local entries = ns.Options()
+	for _, e in ipairs(UI.ScaleEntries(ns.db, function(s) frame:SetScale(s) end)) do
 		entries[#entries + 1] = e
 	end
 	UI.Menu(anchor, entries)
@@ -153,9 +130,14 @@ local function build()
 			UI.Refresh()
 		end)
 	end)
-	search:SetPoint("LEFT", 150, 0)
-	search:SetWidth(280)
+	search:SetPoint("LEFT", 236, 0)
+	search:SetWidth(210)
 	frame.search = search
+
+	frame.pricesTab = UI.Button(frame.bar, "Prices", function() UI.SetView("prices") end)
+	frame.pricesTab:SetPoint("LEFT", 112, 0)
+	frame.sellTab = UI.Button(frame.bar, "Sell", function() UI.SetView("sell") end)
+	frame.sellTab:SetPoint("LEFT", frame.pricesTab, "RIGHT", 6, 0)
 
 	local options = UI.Button(frame.bar, "Options", function(self) optionsMenu(self) end)
 	options:SetPoint("RIGHT", frame.close, "LEFT", -6, 0)
@@ -177,6 +159,7 @@ local function build()
 	head:SetPoint("TOPRIGHT")
 	head:SetHeight(26)
 	UI.Fill(head, { 0.075, 0.08, 0.1, 1 })
+	frame.head = head
 	frame.heads = {}
 	local function header(key, text)
 		local b = UI.Button(head, text, function()
@@ -228,6 +211,7 @@ local function build()
 	foot:SetPoint("BOTTOMRIGHT")
 	foot:SetHeight(22)
 	UI.Fill(foot, C.bar)
+	frame.foot = foot
 	local hint = UI.Text(foot, "GameFontDisableSmall", "LEFT", C.dim)
 	hint:SetPoint("LEFT", 10, 0)
 	frame.hint = hint
@@ -236,11 +220,38 @@ local function build()
 	frame.count = count
 	hint:SetPoint("RIGHT", count, "LEFT", -10, 0)
 
+	frame.sell = ns.SellUI.Build(frame)
+	frame.view = "prices"
 	frame:SetScript("OnShow", function() UI.Refresh() end)
+end
+
+function UI.SetView(name)
+	if not frame then return end
+	frame.view = name == "sell" and "sell" or "prices"
+	local prices = frame.view == "prices"
+	frame.head:SetShown(prices)
+	frame.list:SetShown(prices)
+	frame.foot:SetShown(prices)
+	frame.search:SetShown(prices)
+	if not prices then frame.progress:Hide() end
+	frame.sell:SetShown(not prices)
+	frame.pricesTab:SetActive(prices)
+	frame.sellTab:SetActive(not prices)
+	if prices then
+		UI.Refresh()
+	else
+		ns.SellUI.Refresh()
+	end
+end
+
+function UI.View()
+	return frame and frame.view
 end
 
 function UI.RefreshStatus()
 	if not frame or not frame:IsShown() then return end
+	frame.scanButton:SetShown(ns.ahOpen or ns.Scanning())
+	if frame.view == "sell" then return end
 	local scan = ns.scan
 	local running = ns.Scanning()
 	frame.scanButton:SetLabel(running and "Stop" or "Scan")
@@ -287,10 +298,10 @@ function UI.Refresh(keep)
 	UI.RefreshStatus()
 end
 
-function UI.Show()
+function UI.Show(name)
 	if not frame then build() end
 	frame:Show()
-	UI.Refresh()
+	UI.SetView(name or frame.view)
 end
 
 function UI.Hide()
@@ -320,9 +331,40 @@ local function attach()
 	ahButton = b
 end
 
+local docked = false
+local opened = false
+
+local function dock()
+	local parent = AuctionHouseFrame or AuctionFrame
+	if type(parent) ~= "table" or not ns.db.sell.open then return end
+	opened = not (frame and frame:IsShown())
+	UI.Show("sell")
+	frame:ClearAllPoints()
+	frame:SetPoint("TOPLEFT", parent, "TOPRIGHT", 6, 0)
+	docked = true
+end
+
+local function undock()
+	if not docked or not frame then return end
+	docked = false
+	frame:Restore()
+	if opened then frame:Hide() end
+	opened = false
+end
+
+function UI.Docked()
+	return docked
+end
+
 ns:Listen("AH_CHANGED", function()
-	if ns.ahOpen then attach() end
+	if ns.ahOpen then
+		attach()
+		dock()
+	else
+		undock()
+	end
 	UI.RefreshStatus()
+	if frame and frame.view == "sell" then ns.SellUI.Refresh() end
 end)
 
 ns:Listen("SCAN_PROGRESS", function() UI.RefreshStatus() end)

@@ -11,5 +11,7 @@ Core.lua
 Prices.lua
 Scan.lua
 Tooltip.lua
+Sell.lua
+SellUI.lua
 UI.lua
 

@@ -1,7 +1,10 @@
 local _, ns = ...
 
 local HISTORY = 12
-local GetInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+local function GetInfo(...)
+	local f = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+	if f then return f(...) end
+end
 
 function ns.Realm()
 	local realms = ns.db.realms

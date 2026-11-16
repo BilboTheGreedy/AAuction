@@ -9,9 +9,23 @@ local defaults = {
 	sort = "name",
 	desc = false,
 	realms = {},
+	sell = {
+		open = true,
+		alt = true,
+		log = true,
+		rule = "copper",
+		percent = 1,
+		marketMult = 1,
+		vendorMult = 3,
+		margin = 5,
+		threshold = 500000,
+		duration = 2,
+		bid = 100,
+		prices = {},
+	},
 }
 
-ACore.New(ADDON, ns, { db = "AAuctionDB", defaults = defaults })
+ACore.New(ADDON, ns, { db = "AAuctionDB", defaults = defaults, profile = true, shared = { "realms" } })
 
 AAuction = {}
 
@@ -57,6 +71,7 @@ ACore.Register({
 	slash = "/aah",
 	desc = "auction prices",
 	toggle = function() ns.UI.Toggle() end,
+	options = function() return ns.Options() end,
 })
 
 SLASH_AAUCTION1 = "/aauction"
@@ -66,6 +81,8 @@ SlashCmdList["AAUCTION"] = function(msg)
 	local cmd = msg:lower()
 	if cmd == "" then
 		ns.UI.Toggle()
+	elseif cmd == "sell" then
+		ns.UI.Show("sell")
 	elseif cmd == "scan" then
 		ns.StartScan()
 	elseif cmd == "stop" then
