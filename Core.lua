@@ -8,6 +8,7 @@ local defaults = {
 	passive = true,
 	sort = "name",
 	desc = false,
+	deal = 30,
 	realms = {},
 	sell = {
 		open = true,
@@ -85,6 +86,9 @@ SlashCmdList["AAUCTION"] = function(msg)
 		ns.UI.Show("sell")
 	elseif cmd == "scan" then
 		ns.StartScan()
+	elseif cmd == "deals" then
+		ns.UI.Show("prices")
+		ns.UI.SetDeals(true)
 	elseif cmd == "stop" then
 		ns.StopScan("stopped")
 	elseif cmd == "reset" then

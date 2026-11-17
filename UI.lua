@@ -7,6 +7,7 @@ local GetIcon = (C_Item and C_Item.GetItemIconByID) or GetItemIcon
 
 local frame
 local query = ""
+local deals = false
 
 local COLUMNS = {
 	{ key = "age", text = "Seen", width = 56 },
@@ -139,6 +140,9 @@ local function build()
 	frame.sellTab = UI.Button(frame.bar, "Sell", function() UI.SetView("sell") end)
 	frame.sellTab:SetPoint("LEFT", frame.pricesTab, "RIGHT", 6, 0)
 
+	frame.dealsButton = UI.Button(frame.bar, "Deals", function() UI.SetDeals(not deals) end)
+	frame.dealsButton:SetPoint("LEFT", search, "RIGHT", 6, 0)
+
 	local options = UI.Button(frame.bar, "Options", function(self) optionsMenu(self) end)
 	options:SetPoint("RIGHT", frame.close, "LEFT", -6, 0)
 	frame.options = options
@@ -233,6 +237,7 @@ function UI.SetView(name)
 	frame.list:SetShown(prices)
 	frame.foot:SetShown(prices)
 	frame.search:SetShown(prices)
+	frame.dealsButton:SetShown(prices)
 	if not prices then frame.progress:Hide() end
 	frame.sell:SetShown(not prices)
 	frame.pricesTab:SetActive(prices)
@@ -280,6 +285,9 @@ function UI.RefreshStatus()
 			text = scan.text and scan.text ~= "" and scan.text or "Ready to scan"
 		end
 	end
+	if deals and not running then
+		text = "Listed at least " .. (ns.db.deal or 30) .. "% below market value when last seen"
+	end
 	frame.hint:SetText(text)
 	local last = realm.last and ("last scan " .. ns.Age(realm.last) .. " ago") or "never scanned"
 	frame.count:SetText(#frame.list.data .. " items  ·  " .. ns.realmKey .. "  ·  " .. last)
@@ -294,7 +302,8 @@ function UI.Refresh(keep)
 		b.label:SetTextColor(c[1], c[2], c[3])
 		b:SetWidth(b.fixed)
 	end
-	frame.list:SetData(ns.Rows(query, ns.db.sort, ns.db.desc), keep)
+	frame.dealsButton:SetActive(deals)
+	frame.list:SetData(ns.Rows(query, ns.db.sort, ns.db.desc, deals), keep)
 	UI.RefreshStatus()
 end
 
@@ -316,6 +325,11 @@ function UI.Toggle()
 	end
 end
 
+function UI.SetDeals(on)
+	deals = on and true or false
+	UI.Refresh()
+end
+
 function UI.SetSearch(text)
 	if not frame then return end
 	frame.search.box:SetText(text or "")
@@ -334,13 +348,45 @@ end
 local docked = false
 local opened = false
 
-local function dock()
+local function num(f, method)
+	local fn = f[method]
+	if type(fn) ~= "function" then return nil end
+	local ok, v = pcall(fn, f)
+	if ok and type(v) == "number" then return v end
+	return nil
+end
+
+local function place(parent)
+	frame:ClearAllPoints()
+	local right, left = num(parent, "GetRight"), num(parent, "GetLeft")
+	local ps, fs, us = num(parent, "GetEffectiveScale"), num(frame, "GetEffectiveScale"), num(UIParent, "GetEffectiveScale")
+	local width, total = num(frame, "GetWidth"), num(UIParent, "GetWidth")
+	if right and left and ps and fs and us and us > 0 and width and total then
+		local need = width * fs / us + 6
+		if total - right * ps / us < need and left * ps / us >= need then
+			frame:SetPoint("TOPRIGHT", parent, "TOPLEFT", -6, 0)
+			return
+		end
+	end
+	frame:SetPoint("TOPLEFT", parent, "TOPRIGHT", 6, 0)
+end
+
+local function dock(again)
+	if docked or not ns.ahOpen then return end
 	local parent = AuctionHouseFrame or AuctionFrame
-	if type(parent) ~= "table" or not ns.db.sell.open then return end
+	if type(parent) ~= "table" then
+		if not again then
+			ns.After(0.2, function()
+				attach()
+				dock(true)
+			end)
+		end
+		return
+	end
+	if not ns.db.sell.open then return end
 	opened = not (frame and frame:IsShown())
 	UI.Show("sell")
-	frame:ClearAllPoints()
-	frame:SetPoint("TOPLEFT", parent, "TOPRIGHT", 6, 0)
+	place(parent)
 	docked = true
 end
 

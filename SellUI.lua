@@ -121,6 +121,8 @@ function SellUI.RefreshDetail()
 		warn = "Guess from vendor price, no auctions seen"
 	elseif e.source == "kept" and not opts.price then
 		warn = "Your remembered price"
+	elseif e.source == "own" and not opts.price then
+		warn = "Same as your own auction"
 	end
 	view.lines.warn:SetText(warn)
 	local c = (p and e.vendor and p < e.vendor) and RED or C.dim
@@ -231,7 +233,7 @@ local function createRow(list)
 			return
 		end
 		local result, why = Sell.Click(d)
-		if result == "select" then
+		if result == "select" or result == "confirm" then
 			SellUI.Select(d.id)
 			view.status:SetText(d.name .. ": " .. why .. ". Check the price and press Post.")
 		end
@@ -377,7 +379,7 @@ function SellUI.Build(frame)
 	view.bid:SetPoint("TOPLEFT", 10, -134)
 
 	view.durations = {}
-	for i, text in ipairs(Sell.DURATIONS) do
+	for i, text in ipairs(Sell.Durations()) do
 		local b = UI.Button(d, text, function()
 			opts.duration = i
 			ns.db.sell.duration = i
@@ -406,6 +408,7 @@ function SellUI.Build(frame)
 		if not e then return end
 		local result = Sell.Click(e, { price = price(e), qty = opts.qty, duration = opts.duration, bid = opts.bid, force = true })
 		if result == "posted" and ns.db.sell.prices[e.id] then ns.db.sell.prices[e.id] = price(e) end
+		if result == "confirm" then view.status:SetText("The auction house warns about this price. Press Post again to confirm.") end
 	end)
 	view.post:SetHeight(28)
 	view.post:SetPoint("BOTTOMLEFT", 10, 44)

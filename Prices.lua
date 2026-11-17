@@ -114,6 +114,14 @@ function ns.Trend(e)
 	return (e.b - e.m) / e.m
 end
 
+function ns.Deal(e)
+	if not e or not e.m or not e.b or e.m <= 0 or (e.q or 0) <= 0 or (e.n or 0) < 2 then return nil end
+	if not e.t or ns.Now() - e.t > 2 * 86400 then return nil end
+	local off = 1 - e.b / e.m
+	if off * 100 >= (ns.db.deal or 30) then return off end
+	return nil
+end
+
 function ns.Average(e)
 	local h = e and e.h
 	if not h or #h == 0 then return nil end
@@ -176,12 +184,12 @@ local SORT = {
 	age = function(r) return -(r.e.t or 0) end,
 }
 
-function ns.Rows(query, key, desc)
+function ns.Rows(query, key, desc, deals)
 	local words = {}
 	for w in (query or ""):lower():gmatch("%S+") do words[#words + 1] = w end
 	local rows = {}
 	for id, e in pairs(ns.Realm().items) do
-		if e.m then
+		if e.m and (not deals or ns.Deal(e)) then
 			local name = ns.ItemName(id, e)
 			local lname = name:lower()
 			local hit = true

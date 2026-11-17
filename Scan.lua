@@ -2,7 +2,8 @@ local _, ns = ...
 
 local BATCH = 500
 local ROUNDS = 8
-local TIMEOUT = 45
+local TIMEOUT = 30
+local STALL = 25
 local COOLDOWN = 900
 
 local scan = { state = "idle", total = 0, done = 0, missing = 0 }
@@ -18,7 +19,17 @@ local function classic()
 	return QueryAuctionItems and GetNumAuctionItems and GetAuctionItemInfo
 end
 
+local function browsing()
+	return AH and AH.SendBrowseQuery and AH.GetBrowseResults and AH.RequestMoreBrowseResults and AH.HasFullBrowseResults
+end
+
+local function store()
+	return ns.sv or ns.db
+end
+
 function ns.ScanKind()
+	if modern() and (store().replicateFails or 0) < 2 then return "replicate" end
+	if browsing() then return "browse" end
 	if modern() then return "replicate" end
 	if classic() then return "getall" end
 	return nil
@@ -43,9 +54,9 @@ local function info(i)
 		r = { pcall(GetAuctionItemInfo, "list", i) }
 	end
 	if not r[1] then return nil end
-	local name, qty, buyout, id, complete = r[2], r[4], r[11], r[18], r[19]
+	local name, qty, buyout, id = r[2], r[4], r[11], r[18]
 	if ns.IsSecret(qty) or ns.IsSecret(buyout) or ns.IsSecret(id) or ns.IsSecret(name) then return false end
-	if not complete or type(id) ~= "number" or id <= 0 then return nil end
+	if type(id) ~= "number" or id <= 0 or type(buyout) ~= "number" then return nil end
 	return id, type(qty) == "number" and qty > 0 and qty or 1, type(buyout) == "number" and buyout or 0, type(name) == "string" and name or nil
 end
 
@@ -59,11 +70,13 @@ local function finish(state, text)
 	scan.token = (scan.token or 0) + 1
 	scan.found = nil
 	scan.pending = nil
+	scan.keys = nil
+	scan.more = nil
 	status(text)
 end
 
 function ns.CooldownLeft()
-	local last = ns.db.lastFull
+	local last = store().lastFull
 	if not last then return 0 end
 	local left = COOLDOWN - (ns.Now() - last)
 	if left < 0 or left > COOLDOWN then return 0 end
@@ -71,7 +84,7 @@ function ns.CooldownLeft()
 end
 
 function ns.Scanning()
-	return scan.state == "waiting" or scan.state == "reading"
+	return scan.state == "waiting" or scan.state == "reading" or scan.state == "browsing"
 end
 
 local function add(id, qty, buyout, name)
@@ -144,6 +157,8 @@ local function begin()
 	if scan.state ~= "waiting" then return end
 	local total = count()
 	if total == 0 then return end
+	store().lastFull = ns.Now()
+	store().replicateFails = nil
 	scan.state = "reading"
 	scan.total = total
 	scan.done = 0
@@ -163,7 +178,127 @@ function ns.StopScan(reason)
 	finish("idle", reason and ("Scan " .. reason) or "")
 end
 
-function ns.StartScan()
+local function quality()
+	local out = {}
+	local f = Enum and Enum.AuctionHouseFilter
+	if type(f) ~= "table" then return out end
+	for _, key in ipairs({ "PoorQuality", "CommonQuality", "UncommonQuality", "RareQuality", "EpicQuality", "LegendaryQuality", "ArtifactQuality" }) do
+		if f[key] then out[#out + 1] = f[key] end
+	end
+	return out
+end
+
+local function sorts()
+	local out = {}
+	local o = Enum and Enum.AuctionHouseSortOrder
+	if type(o) ~= "table" then return out end
+	if o.Price then out[#out + 1] = { sortOrder = o.Price, reverseSort = false } end
+	if o.Name then out[#out + 1] = { sortOrder = o.Name, reverseSort = false } end
+	return out
+end
+
+local function idle()
+	local AHready = AH and AH.IsThrottledMessageSystemReady
+	if not AHready then return true end
+	local ok, r = pcall(AHready)
+	return not ok or r ~= false
+end
+
+local function browseDone(full)
+	local found = {}
+	local n = 0
+	for _, k in pairs(scan.keys or {}) do
+		n = n + 1
+		local f = found[k[1]]
+		if not f then
+			f = { min = k[2], qty = 0, units = {} }
+			found[k[1]] = f
+		end
+		if k[2] < f.min then f.min = k[2] end
+		f.qty = f.qty + k[3]
+		f.units[#f.units + 1] = { k[2], k[3] }
+	end
+	if n == 0 then
+		finish("idle", "The auction house sent nothing")
+		return
+	end
+	local priced = ns.Commit(found, full)
+	finish("done", priced .. " items priced by browsing")
+	ns.Print("scan finished, " .. priced .. " items priced" .. (full and "" or ", the list was cut short"))
+	ns:Fire("SCAN_DONE")
+end
+
+local function watch(token)
+	local mark = scan.done
+	ns.After(STALL, function()
+		if scan.token ~= token or scan.state ~= "browsing" then return end
+		if scan.done == mark then
+			browseDone(false)
+		else
+			watch(token)
+		end
+	end)
+end
+
+local function more()
+	if scan.state ~= "browsing" then return end
+	local ok, full = pcall(AH.HasFullBrowseResults)
+	if ok and full then
+		browseDone(true)
+		return
+	end
+	if not idle() then
+		scan.more = true
+		return
+	end
+	scan.more = nil
+	if not pcall(AH.RequestMoreBrowseResults) then browseDone(false) end
+end
+
+local function collect(list)
+	if scan.state ~= "browsing" then return end
+	if type(list) ~= "table" then
+		local ok, all = pcall(AH.GetBrowseResults)
+		list = ok and all or nil
+	end
+	if type(list) ~= "table" then return end
+	local keys = scan.keys
+	for _, r in ipairs(list) do
+		local key = type(r) == "table" and r.itemKey
+		local id = type(key) == "table" and key.itemID
+		local price, qty = r.minPrice, r.totalQuantity
+		if type(id) == "number" and not ns.IsSecret(id) and type(price) == "number" and not ns.IsSecret(price) and price > 0 then
+			if type(qty) ~= "number" or ns.IsSecret(qty) or qty < 1 then qty = 1 end
+			local name = id .. ":" .. tostring(key.itemLevel or 0) .. ":" .. tostring(key.itemSuffix or 0) .. ":" .. tostring(key.battlePetSpeciesID or 0)
+			if not keys[name] then scan.done = scan.done + 1 end
+			keys[name] = { id, price, qty }
+		end
+	end
+	scan.total = scan.done
+	status("Browsing auctions, " .. scan.done .. " listings")
+	more()
+end
+
+local function startBrowse()
+	scan.token = (scan.token or 0) + 1
+	scan.state = "browsing"
+	scan.total = 0
+	scan.done = 0
+	scan.missing = 0
+	scan.keys = {}
+	scan.more = nil
+	local ok = pcall(AH.SendBrowseQuery, { searchString = "", sorts = sorts(), filters = quality(), itemClassFilters = {} })
+	if not ok then
+		finish("idle", "Scan request failed")
+		ns.Print("scan request failed")
+		return false
+	end
+	status("Browsing auctions")
+	watch(scan.token)
+	return true
+end
+
+function ns.StartScan(kind)
 	if ns.Scanning() then
 		ns.Print("a scan is already running")
 		return false
@@ -172,15 +307,26 @@ function ns.StartScan()
 		ns.Print("open the auction house first")
 		return false
 	end
-	local kind = ns.ScanKind()
+	kind = kind or ns.ScanKind()
 	if not kind then
 		ns.Print("no auction scan API on this client")
 		return false
 	end
-	local left = ns.CooldownLeft()
-	if left > 0 then
-		ns.Print(string.format("full scan available in %d:%02d", math.floor(left / 60), left % 60))
-		return false
+	if kind ~= "browse" then
+		local left = ns.CooldownLeft()
+		if left > 0 and browsing() then
+			kind = "browse"
+		elseif left > 0 then
+			ns.Print(string.format("full scan available in %d:%02d", math.floor(left / 60), left % 60))
+			return false
+		end
+	end
+	if kind == "browse" then
+		if not browsing() then
+			ns.Print("no auction scan API on this client")
+			return false
+		end
+		return startBrowse()
 	end
 	if kind == "getall" and CanSendAuctionQuery then
 		local ok, _, all = pcall(CanSendAuctionQuery, "list")
@@ -206,15 +352,24 @@ function ns.StartScan()
 		ns.Print("scan request failed")
 		return false
 	end
-	ns.db.lastFull = ns.Now()
 	status("Waiting for the auction house")
 	ns.After(TIMEOUT, function()
-		if scan.token == token and scan.state == "waiting" then
-			finish("idle", "No answer from the auction house")
+		if scan.token ~= token or scan.state ~= "waiting" then return end
+		if kind == "replicate" then store().replicateFails = (store().replicateFails or 0) + 1 end
+		finish("idle", "No answer from the auction house")
+		if kind == "replicate" and browsing() and ns.ahOpen then
+			ns.Print("no answer to the full scan, browsing the auction house instead")
+			startBrowse()
+		else
 			ns.Print("no answer from the auction house, the server allows one full scan every 15 minutes")
 		end
 	end)
 	return true
+end
+
+function ns.RetryFullScan()
+	store().replicateFails = nil
+	store().lastFull = nil
 end
 
 ns:On("REPLICATE_ITEM_LIST_UPDATE", function()
@@ -232,7 +387,11 @@ ns:Listen("AH_CHANGED", function()
 	end
 end)
 
-local function browse()
+local function browse(added)
+	if scan.state == "browsing" then
+		collect(added)
+		return
+	end
 	if not ns.db or not ns.db.passive or ns.Scanning() then return end
 	if not AH or not AH.GetBrowseResults then return end
 	local ok, results = pcall(AH.GetBrowseResults)
@@ -252,5 +411,11 @@ local function browse()
 	end
 end
 
-ns:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", browse)
+ns:On("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", function() browse() end)
 ns:On("AUCTION_HOUSE_BROWSE_RESULTS_ADDED", browse)
+ns:On("AUCTION_HOUSE_BROWSE_FAILURE", function()
+	if scan.state == "browsing" then browseDone(false) end
+end)
+ns:On("AUCTION_HOUSE_THROTTLED_SYSTEM_READY", function()
+	if scan.state == "browsing" and scan.more then more() end
+end)
